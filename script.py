@@ -3,13 +3,14 @@
 
 import re
 import os, codecs
+from xml.dom.minidom import parse
 
 # Parameters
 #################################################
 
 DICTIONARY = "./dico/elra_utf8.final"
 
-SOURCE = "./data/corpus_breast_cancer/tmp_sc_fr/corpus.lem.utf8.tmp"
+SOURCE = "./data/corpus_breast_cancer/tmp_sc_fr/shortcorpus.lem.utf8.tmp"
 TARGET = "./data/corpus_breast_cancer/tmp_sc_en/corpus.lem.utf8.tmp"
 
 GOLD = "./data/corpus_breast_cancer/ts.xml"
@@ -27,7 +28,7 @@ WINDOWSIZE = 3
 #################################################
 
 # Récupération du dictionnaire
-def importDict(filename):
+def loadDict(filename):
 	dic = {}
 	with codecs.open(filename, "r", "utf-8") as dictfile:
 		for line in dictfile:
@@ -52,34 +53,96 @@ def getLemma(token):
 		return token.split('/')[2].split(':')[0]
 
 # Récupération du corpus fr
-def importSource(filename):
+def loadSource(filename):
 	fr = ""
 	with codecs.open(filename, "r", "utf-8") as srcfile:
 		for line in srcfile:
-			fr += line
+			matchFILE = re.match( r'^__FILE', line, re.M|re.I)
+			matchENDFILE = re.match( r'^__ENDFILE', line, re.M|re.I)
+			if not matchFILE and not matchENDFILE:
+				fr += line
 	return fr.split(" ")
 
 # Filtrage des stopwords
-def filterStopWords(words, stopwordsfile):
+def filterStopWords(tokens, stopwordsfile):
 	stopwords = []
-	filteredWords = []
+	filteredTokens = []
 	with codecs.open(stopwordsfile, "r", "utf-8") as swfile:
 		for line in swfile.readlines():
 			stopwords.append(line[0:-1])
-	for word in words:
-		lemma = getLemma(word)
-		if getWord(word) not in stopwords and lemma not in stopwords and lemma not in [',', "'", ';', ':', '_'] and not lemma.isdigit(): #R
-			filteredWords.append(word)
-	return filteredWords
+	for token in tokens:
+		lemma = getLemma(token)
+		word = getWord(token).lower()
+		if word not in stopwords and lemma not in stopwords and lemma not in [',', '.', "'", ';', ':', '_', '?', '!'] and not lemma.isdigit() and not token.isspace() and len(token.split('/')) > 2:
+			pos = getPOS(token)
+			if pos not in ['CAR', 'UNITE', 'SYM']:
+				filteredTokens.append(token)
+	return filteredTokens
 
+# Récupération des termes source non traduits
+# def filterAlreadyTranslated(tokens, dict):
+# 	filteredTokens = []
+# 	for token in tokens:
+# 		lemma = getLemma(token)
+# 		word = getWord(token).lower()
+# 		if word not in dict and lemma not in dict and word not in filteredTokens:
+# 			filteredTokens.append(token)
+# 	return filteredTokens
+
+# Création des vecteurs de contexte
+def contextVectors(tokens):
+	cvlist = {}
+	i = 0
+	for token in tokens:
+		word = getWord(token).lower()
+		lemma = getLemma(token)
+		#print i, word
+		if lemma not in cvlist:
+			cvlist[lemma] = {}
+		for k in range(0,min(i,WINDOWSIZE)):
+			contextWord = tokens[i-k-1]
+			contextLemma = getLemma(contextWord)
+			if contextLemma not in cvlist[lemma]:
+				cvlist[lemma][contextLemma] = 1
+			else:
+				cvlist[lemma][contextLemma] += 1
+		for k in range(0,min(len(tokens)-i-1,WINDOWSIZE)):
+			contextWord = tokens[i+k+1]
+			contextLemma = getLemma(contextWord)
+			if contextLemma not in cvlist[lemma]:
+				cvlist[lemma][contextLemma] = 1
+			else:
+				cvlist[lemma][contextLemma] += 1
+		i += 1
+	return cvlist
+
+# Récupération du gold
+def loadGold(filename):
+	dom = parse(filename)
+	gold = {}
+	source = ""
+	targets = []
+	for element in dom.getElementsByTagName('TRAD'):
+		if element.attributes['valid'].value == 'yes':
+			for lang in element.getElementsByTagName('LANG'):
+				if lang.getAttribute('type') == 'source':
+					source = lang.getElementsByTagName('LEM')[0].firstChild.wholeText
+				else:
+					targets.append(lang.getElementsByTagName('LEM')[0].firstChild.wholeText)
+			gold[source] = targets
+	return gold
 
 # Main
 #################################################
 
-#dic = importDict(DICTIONARY)
-source = importSource(SOURCE)
+dic = loadDict(DICTIONARY)
+source = loadSource(SOURCE)
 clean_source = filterStopWords(source,SOURCESTOPWORDS)
-print clean_source
+cvlist = contextVectors(clean_source)
+for cv in cvlist:
+	print cv
+	for term in cvlist[cv]:
+		print "==>", term, cvlist[cv][term]
 
 #etc/sudoers entre env_reset et badpass
 #source ~/.bashrc
@@ -87,9 +150,4 @@ print clean_source
 # top10 et top2O
 
 
-# print line
-# 		matchObj = re.search( r'.*/.*/(.*) ', line, re.M|re.I)
-# 		if matchObj:
-# 			print matchObj.group(1)
-# 		else:
-# 			print "No match!!"
+# tester si aa_bbb => remplacer par aa bbb pour chercher dans le dico
